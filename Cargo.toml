@@ -1,0 +1,12 @@
+[package]
+authors = ["Ingvar Stepanyan <me@rreverser.com>"]
+name = "esmozy"
+version = "0.1.0"
+
+[dependencies]
+env_logger = "0.4.3"
+
+[dependencies.js]
+git = "https://github.com/servo/rust-mozjs"
+optional = false
+features = ["debugmozjs"]
