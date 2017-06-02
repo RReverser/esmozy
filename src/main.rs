@@ -3,50 +3,97 @@ extern crate env_logger;
 #[macro_use]
 extern crate js;
 
-use js::conversions::{FromJSValConvertible, ToJSValConvertible, ConversionResult};
-use js::jsapi::CompartmentOptions;
-use js::jsapi::JS_NewGlobalObject;
-use js::jsapi::OnNewGlobalHookOption;
-use js::jsapi::JS_InitReflectParse;
-use js::jsapi::JSAutoCompartment;
-use js::jsapi::JS_FireOnNewGlobalObject;
-use js::jsval::{UndefinedValue, ObjectValue};
-use js::jsapi::HandleObject;
-use js::rust::{Runtime, SIMPLE_GLOBAL_CLASS};
-use js::jsapi::ToJSONMaybeSafely;
+use js::rust::{Runtime, Trace, SIMPLE_GLOBAL_CLASS};
+use js::jsval::*;
+use js::jsapi::*;
+use js::conversions::*;
+use std::string::String;
 
 use std::ptr;
 
-thread_local!(static RT: Runtime = Runtime::new().unwrap());
+#[derive(Default)]
+struct HeapValues {
+    global: Heap<*mut JSObject>,
+    parse: Heap<*mut JSFunction>,
+}
+
+impl Drop for HeapValues {
+    fn drop(&mut self) {
+        self.global.set(ptr::null_mut());
+        self.parse.set(ptr::null_mut());
+    }
+}
+
+unsafe impl Trace for HeapValues {
+    unsafe fn trace(&self, tracer: *mut JSTracer) {
+        self.global.trace(tracer);
+        self.parse.trace(tracer);
+    }
+}
+
+extern fn trace_heap_values(tracer: *mut JSTracer, data: *mut ::std::os::raw::c_void) {
+    unsafe {
+        (*(data as *mut HeapValues)).trace(tracer);
+    }
+}
+
+thread_local!(static RT: (Box<HeapValues>, Runtime) = unsafe {
+    let rt = Runtime::new().unwrap();
+    let cx = rt.cx();
+
+    let mut heap_values = Box::<HeapValues>::default();
+
+    JS_AddExtraGCRootsTracer(rt.rt(), Some(trace_heap_values), heap_values.as_mut() as *mut _ as _);
+
+    heap_values.global.set(JS_NewGlobalObject(
+        cx,
+        &SIMPLE_GLOBAL_CLASS,
+        ptr::null_mut(),
+        OnNewGlobalHookOption::DontFireOnNewGlobalHook,
+        &CompartmentOptions::default()
+    ));
+
+    let _ac = JSAutoCompartment::new(cx, heap_values.global.get());
+
+    let global_handle = heap_values.global.handle();
+
+    JS_InitReflectParse(cx, global_handle);
+    JS_FireOnNewGlobalObject(cx, global_handle);
+
+    rooted!(in(cx) let mut rval = UndefinedValue());
+
+    rt.evaluate_script(
+        global_handle,
+        include_str!("script.js"),
+        "script.js",
+        1,
+        rval.handle_mut()
+    ).unwrap();
+
+    heap_values.parse.set(JS_ValueToFunction(cx, rval.handle()));
+
+    (heap_values, rt)
+});
 
 fn parse(input: &str) -> String {
-    RT.with(|rt| {
+    RT.with(|&(ref heap_values, ref rt)| {
         let cx = rt.cx();
 
         unsafe {
-            rooted!(in(cx) let global = JS_NewGlobalObject(
-                cx,
-                &SIMPLE_GLOBAL_CLASS,
-                ptr::null_mut(),
-                OnNewGlobalHookOption::DontFireOnNewGlobalHook,
-                &CompartmentOptions::default()
-            ));
-            let global = global.handle();
-            let _ac = JSAutoCompartment::new(cx, global.get());
-            JS_InitReflectParse(cx, global);
-            JS_FireOnNewGlobalObject(cx, global);
+            let _ac = JSAutoCompartment::new(cx, heap_values.global.get());
+
             rooted!(in(cx) let mut source = UndefinedValue());
             input.to_jsval(cx, source.handle_mut());
-            ::js::jsapi::JS_SetProperty(cx, global, b"source\0" as *const _ as _, source.handle());
+
             rooted!(in(cx) let mut rval = UndefinedValue());
-            assert!(rt.evaluate_script(global, r#"
-                try {
-                    Reflect.parse(source)
-                } catch (e) {
-                    ({type: "Error", message: e.message})
-                }
-            "#, "test", 1, rval.handle_mut()).is_ok());
-            rooted!(in(cx) let rval = rval.to_object());
+
+            JS_CallFunction(
+                cx,
+                HandleObject::null(),
+                heap_values.parse.handle(),
+                &HandleValueArray::from_rooted_slice(&[source.get()]) as _,
+                rval.handle_mut()
+            );
 
             let mut out_json = String::new();
 
@@ -57,7 +104,7 @@ fn parse(input: &str) -> String {
 
                 out_json.extend(
                     char::decode_utf16(
-                        ::std::slice::from_raw_parts(buf, len as usize)
+                        slice::from_raw_parts(buf, len as usize)
                         .iter()
                         .cloned()
                     )
@@ -66,6 +113,8 @@ fn parse(input: &str) -> String {
 
                 true
             }
+
+            rooted!(in(cx) let rval = rval.to_object());
 
             ToJSONMaybeSafely(
                 cx,
@@ -82,5 +131,9 @@ fn parse(input: &str) -> String {
 fn main() {
     env_logger::init().unwrap();
 
-    println!("{}", parse("hello + '\\uD834\\uDF06'"));
+    RT.with(|&(.., ref rt)| unsafe {
+        ::js::jsapi::JS_GC(rt.rt());
+    });
+
+    println!("{}", parse("hello# + '\\uD834\\uDF06'"));
 }
