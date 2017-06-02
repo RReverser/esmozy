@@ -135,5 +135,5 @@ fn main() {
         ::js::jsapi::JS_GC(rt.rt());
     });
 
-    println!("{}", parse("hello# + '\\uD834\\uDF06'"));
+    println!("{}", parse("/abc/"));
 }
