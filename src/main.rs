@@ -131,9 +131,11 @@ fn parse(input: &str) -> String {
 fn main() {
     env_logger::init().unwrap();
 
-    RT.with(|&(.., ref rt)| unsafe {
-        ::js::jsapi::JS_GC(rt.rt());
-    });
+    if cfg!(debug_assertions) {
+        RT.with(|&(.., ref rt)| unsafe {
+            ::js::jsapi::JS_GC(rt.rt());
+        });
+    }
 
     println!("{}", parse("/abc/"));
 }
