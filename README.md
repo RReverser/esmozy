@@ -1,6 +1,6 @@
 # esmozy
 
-SpiderMonkey AST is largely compatible with [ESTree](https://github.com/estree/estree) in Rust, and can be made fully compatible by overriding AST builders via options.
+SpiderMonkey AST is largely compatible with [ESTree](https://github.com/estree/estree), and can be made fully compatible by overriding AST builders via options.
 
 SpiderMonkey, unlike all the other JavaScript engines, exposes its parser via a public API - [`Reflect.parse`](https://developer.mozilla.org/en-US/docs/Mozilla/Projects/SpiderMonkey/Parser_API#Reflect.parse(src_options)) - available even from their JavaScript console.
 
